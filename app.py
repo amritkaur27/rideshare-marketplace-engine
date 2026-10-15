@@ -3,13 +3,16 @@ import pandas as pd
 import joblib
 import os
 
-# Set page configuration
 st.set_page_config(page_title="Lyft Marketplace Pricing & Optimization Engine", layout="wide")
 
-# Load models safely using absolute path
-project_dir = '/Users/amritkaur/Desktop/Projects/Rideshare Project'
+base_dir = os.path.dirname(os.path.abspath(__file__))
+project_dir = os.path.join(base_dir, 'outputs')
 fare_model_path = os.path.join(project_dir, 'fare_model.pkl')
 pay_model_path = os.path.join(project_dir, 'pay_model.pkl')
+
+if not (os.path.exists(fare_model_path) and os.path.exists(pay_model_path)):
+    st.error("Trained models not found. Run `python rideshare_pricing_model.py` first to create them in the `outputs/` folder.")
+    st.stop()
 
 @st.cache_resource
 def load_models():
@@ -19,11 +22,10 @@ def load_models():
 
 fare_model, pay_model = load_models()
 
-# App Header
 st.title("Lyft Dynamic Pricing & Marketplace Optimization Engine")
 st.markdown("Simulate ride parameters to predict market-clearing passenger fares, driver payouts, and platform take-rates in real time.")
 
-# Sidebar controls for ride simulation (7 features matching training schema)
+# Sidebar controls for ride simulation
 st.sidebar.header("Ride Parameters")
 miles = st.sidebar.slider("Trip Distance (Miles)", 0.5, 25.0, 4.5, 0.5)
 pickup_hour = st.sidebar.slider("Pickup Hour (0-23)", 0, 23, 17)
@@ -76,7 +78,7 @@ col2.metric("Predicted Driver Payout", f"${predicted_payout:.2f}")
 col3.metric("Platform Revenue", f"${platform_cut:.2f}")
 col4.metric("Take-Rate", f"{take_rate_pct:.1f}%")
 
-# Marketplace Health Assessment (Statistically neutral language)
+# Marketplace Health Assessment 
 st.markdown("---")
 st.subheader("Marketplace Margin Assessment")
 
@@ -87,12 +89,12 @@ elif take_rate_pct > 30:
 else:
     st.success("✅ Target Range: Take-rate falls within the selected operating range.")
 
-# --- Optimization Scenario Analysis Layer ---
+
 st.markdown("---")
 st.subheader("Pricing Sensitivity Analysis")
 st.markdown("Test alternative passenger fare price points against the baseline model payout to evaluate sensitivity on platform revenue and take-rates.")
 
-# Generate dynamic scenario range centered around predicted fare
+
 base_fare_rounded = round(predicted_fare / 5) * 5
 fare_options = [max(10.0, base_fare_rounded - 10.0), max(12.0, base_fare_rounded - 5.0), base_fare_rounded, base_fare_rounded + 5.0, base_fare_rounded + 10.0]
 fare_options = sorted(list(set(fare_options)))
