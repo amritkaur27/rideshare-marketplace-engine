@@ -8,11 +8,25 @@ from sklearn.dummy import DummyRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 import joblib
 import os
-
-# 1. Extract and Sample Clean Data via DuckDB (No post-ride leakage variables)
+import urllib.request
+ 
+ 
+# Paths are relative to this script so the code runs on any machine
+base_dir = os.path.dirname(os.path.abspath(__file__))
+data_dir = os.path.join(base_dir, 'data')
+file_path = os.path.join(data_dir, 'fhvhv_tripdata_2025-07.parquet')
+ 
+# Download the dataset from the NYC TLC if not already in the data folder
+if not os.path.exists(file_path):
+    os.makedirs(data_dir, exist_ok=True)
+    print("Data file not found. Downloading from NYC TLC (large file, may take a few minutes)...")
+    urllib.request.urlretrieve(
+        'https://d37ci6vzurychx.cloudfront.net/trip-data/fhvhv_tripdata_2025-07.parquet',
+        file_path
+    )
+ 
 print("Extracting and sampling data via DuckDB...")
-file_path = '/Users/amritkaur/Desktop/Projects/Rideshare Project/fhvhv_tripdata_2025-07.parquet'
-
+ 
 con = duckdb.connect(database=':memory:')
 ml_query = f"""
     SELECT 
@@ -32,41 +46,41 @@ ml_query = f"""
     USING SAMPLE 200000 (reservoir, 42);
 """
 df_ml = con.execute(ml_query).df()
-
-# 2. Define Features (Available strictly at request time + explicit airport feature)
+ 
+# Define Features 
 X = df_ml[['trip_miles', 'PULocationID', 'DOLocationID', 'pickup_hour', 'day_of_week', 'is_peak', 'is_airport']]
 y_fare = df_ml['base_passenger_fare']
 y_pay = df_ml['driver_pay']
-
+ 
 X_train, X_test, y_fare_train, y_fare_test, y_pay_train, y_pay_test = train_test_split(
     X, y_fare, y_pay, test_size=0.2, random_state=42
 )
-
-# 3. Train Final Models 
+ 
+# Train Models 
 print("\nTraining Final Models...")
 fare_model = RandomForestRegressor(n_estimators=100, max_depth=15, random_state=42)
 fare_model.fit(X_train, y_fare_train)
-
+ 
 pay_model = RandomForestRegressor(n_estimators=100, max_depth=15, random_state=42)
 pay_model.fit(X_train, y_pay_train)
-
-# 4. RIGOROUS VALIDATION SUITE
+ 
+ 
 print("\n" + "="*50)
 print(" PART 2: COMPREHENSIVE MODEL VALIDATION SUITE")
 print("="*50)
-
-# A. Cross-Validation (Both Models)
+ 
+# Cross-Validation 
 cv = KFold(n_splits=5, shuffle=True, random_state=42)
-
+ 
 fare_cv_scores = cross_val_score(fare_model, X_train, y_fare_train, cv=cv, scoring='r2')
 print(f"\n[5-Fold Cross-Validation - Passenger Fare]")
 print(f"Mean R²: {fare_cv_scores.mean():.3f} (Std: {fare_cv_scores.std():.3f})")
-
+ 
 pay_cv_scores = cross_val_score(pay_model, X_train, y_pay_train, cv=cv, scoring='r2')
 print(f"\n[5-Fold Cross-Validation - Driver Pay]")
 print(f"Mean R²: {pay_cv_scores.mean():.3f} (Std: {pay_cv_scores.std():.3f})")
-
-# B. Bias-Variance Tradeoff Experiment (Varying Max Depth with MAE & R²)
+ 
+# Bias-Variance Tradeoff
 print(f"\n[Bias-Variance Tradeoff Experiment (Driver Pay)]")
 depths = [3, 5, 8, 10, 15, 20, None]
 depth_results = []
@@ -85,41 +99,41 @@ for d in depths:
         'Test MAE': te_mae
     })
 print(pd.DataFrame(depth_results).to_string(index=False))
-
-# C. Model Comparison (Baseline vs Linear Regression vs Random Forest)
+ 
+# Model Comparison
 print(f"\n[Model Architecture Comparison (Driver Pay MAE)]")
 dummy = DummyRegressor(strategy="mean")
 dummy.fit(X_train, y_pay_train)
 dummy_mae = mean_absolute_error(y_pay_test, dummy.predict(X_test))
-
+ 
 lin_reg = LinearRegression()
 lin_reg.fit(X_train, y_pay_train)
 lin_mae = mean_absolute_error(y_pay_test, lin_reg.predict(X_test))
-
+ 
 rf_mae = mean_absolute_error(y_pay_test, pay_model.predict(X_test))
-
+ 
 print(f"Mean Baseline MAE: ${dummy_mae:.2f}")
 print(f"Linear Regression MAE: ${lin_mae:.2f}")
 print(f"Random Forest MAE: ${rf_mae:.2f}")
-
-# D. Segment Bias Analysis & Residuals Setup
+ 
+# Segment Bias Analysis & Residuals Setup
 test_results = X_test.copy()
 test_results['actual_pay'] = y_pay_test
 test_results['predicted_pay'] = pay_model.predict(X_test)
 test_results['pay_residual'] = test_results['actual_pay'] - test_results['predicted_pay']
-
-# Hourly Bias (Sorted properly)
+ 
+# Hourly Bias
 hour_bias = test_results.groupby('pickup_hour')['pay_residual'].agg(['mean', lambda x: np.mean(np.abs(x)), 'count'])
 hour_bias.columns = ['Mean Residual (Bias)', 'MAE', 'Count']
 print(f"\n[Top 5 Most Underpredicted Hours]")
 print(hour_bias.sort_values('Mean Residual (Bias)', ascending=False).head(5))
-
+ 
 # Peak vs Non-Peak Bias
 peak_bias = test_results.groupby('is_peak')['pay_residual'].agg(['mean', lambda x: np.mean(np.abs(x)), 'count'])
 peak_bias.columns = ['Mean Residual (Bias)', 'MAE', 'Count']
 print(f"\n[Bias Check: Peak vs Non-Peak]")
 print(peak_bias)
-
+ 
 # Trip Distance Bias
 test_results['distance_bin'] = pd.cut(
     test_results['trip_miles'],
@@ -130,14 +144,14 @@ distance_bias = test_results.groupby('distance_bin', observed=False)['pay_residu
 distance_bias.columns = ['Mean Residual (Bias)', 'MAE', 'Count']
 print(f"\n[Bias Check by Trip Distance]")
 print(distance_bias)
-
-# E. Feature Importance
+ 
+# Feature Importance
 print(f"\n[Feature Importance - Driver Pay]")
 importances = pd.Series(pay_model.feature_importances_, index=X.columns).sort_values(ascending=False)
 print(importances)
-
-# 5. Save Final Validated Models
-project_dir = '/Users/amritkaur/Desktop/Projects/Rideshare Project'
+ 
+# Final Validated Models
+project_dir = os.path.join(base_dir, 'outputs')
 os.makedirs(project_dir, exist_ok=True)
 joblib.dump(fare_model, f'{project_dir}/fare_model.pkl')
 joblib.dump(pay_model, f'{project_dir}/pay_model.pkl')
